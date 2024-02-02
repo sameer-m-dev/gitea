@@ -194,8 +194,12 @@ func InitEngineWithMigration(ctx context.Context, migrateFunc func(*xorm.Engine)
 		return fmt.Errorf("migrate: %w", err)
 	}
 
-	if err = SyncAllTables(); err != nil {
-		return fmt.Errorf("sync database struct error: %w", err)
+	// Sync all tables only if auto migration is enabled, otherwise we will not sync any tables
+	// And assume that the tables are already created in the database and have the correct schema
+	if setting.Database.AutoMigration {
+		if err = SyncAllTables(); err != nil {
+			return fmt.Errorf("sync database struct error: %w", err)
+		}
 	}
 
 	for _, initFunc := range initFuncs {
