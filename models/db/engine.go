@@ -182,7 +182,11 @@ func InitEngineWithMigration(ctx context.Context, migrateFunc func(*xorm.Engine)
 		return err
 	}
 
-	preprocessDatabaseCollation(x)
+	// Preprocess database collation if auto migration is enabled, otherwise we will not preprocess the database collation
+	// And assume that the database collation is already set correctly
+	if setting.Database.AutoMigration {
+		preprocessDatabaseCollation(x)
+	}
 
 	// We have to run migrateFunc here in case the user is re-running installation on a previously created DB.
 	// If we do not then table schemas will be changed and there will be conflicts when the migrations run properly.
