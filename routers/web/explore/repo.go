@@ -4,23 +4,21 @@
 package explore
 
 import (
-	"fmt"
 	"net/http"
-	"strings"
 
-	"code.gitea.io/gitea/models/db"
-	repo_model "code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/modules/base"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/sitemap"
-	"code.gitea.io/gitea/services/context"
+	"gitea.dev/models/db"
+	repo_model "gitea.dev/models/repo"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/sitemap"
+	"gitea.dev/modules/templates"
+	"gitea.dev/services/context"
 )
 
 const (
 	// tplExploreRepos explore repositories page template
-	tplExploreRepos        base.TplName = "explore/repos"
-	relevantReposOnlyParam string       = "only_show_relevant"
+	tplExploreRepos        templates.TplName = "explore/repos"
+	relevantReposOnlyParam string            = "only_show_relevant"
 )
 
 // RepoSearchOptions when calling search repositories
@@ -30,14 +28,14 @@ type RepoSearchOptions struct {
 	Restricted       bool
 	PageSize         int
 	OnlyShowRelevant bool
-	TplName          base.TplName
+	TplName          templates.TplName
 }
 
 // RenderRepoSearch render repositories search page
 // This function is also used to render the Admin Repository Management page.
 func RenderRepoSearch(ctx *context.Context, opts *RepoSearchOptions) {
 	// Sitemap index for sitemap paths
-	page := int(ctx.PathParamInt64("idx"))
+	page := ctx.PathParamInt("idx")
 	isSitemap := ctx.PathParam("idx") != ""
 	if page <= 1 {
 		page = ctx.FormInt("page")
@@ -58,7 +56,7 @@ func RenderRepoSearch(ctx *context.Context, opts *RepoSearchOptions) {
 		orderBy db.SearchOrderBy
 	)
 
-	sortOrder := strings.ToLower(ctx.FormString("sort"))
+	sortOrder := ctx.FormString("sort")
 	if sortOrder == "" {
 		sortOrder = setting.UI.ExploreDefaultSort
 	}
@@ -96,7 +94,7 @@ func RenderRepoSearch(ctx *context.Context, opts *RepoSearchOptions) {
 	private := ctx.FormOptionalBool("private")
 	ctx.Data["IsPrivate"] = private
 
-	repos, count, err = repo_model.SearchRepository(ctx, &repo_model.SearchRepoOptions{
+	repos, count, err = repo_model.SearchRepository(ctx, repo_model.SearchRepoOptions{
 		ListOptions: db.ListOptions{
 			Page:     page,
 			PageSize: opts.PageSize,
@@ -139,11 +137,8 @@ func RenderRepoSearch(ctx *context.Context, opts *RepoSearchOptions) {
 	ctx.Data["Repos"] = repos
 	ctx.Data["IsRepoIndexerEnabled"] = setting.Indexer.RepoIndexerEnabled
 
-	pager := context.NewPagination(int(count), opts.PageSize, page, 5)
-	pager.SetDefaultParams(ctx)
-	pager.AddParamString("topic", fmt.Sprint(topicOnly))
-	pager.AddParamString("language", language)
-	pager.AddParamString(relevantReposOnlyParam, fmt.Sprint(opts.OnlyShowRelevant))
+	pager := context.NewPagination(count, opts.PageSize, page, 5)
+	pager.AddParamFromRequest(ctx.Req)
 	ctx.Data["Page"] = pager
 
 	ctx.HTML(http.StatusOK, opts.TplName)
@@ -151,9 +146,12 @@ func RenderRepoSearch(ctx *context.Context, opts *RepoSearchOptions) {
 
 // Repos render explore repositories page
 func Repos(ctx *context.Context) {
-	ctx.Data["UsersIsDisabled"] = setting.Service.Explore.DisableUsersPage
-	ctx.Data["Title"] = ctx.Tr("explore")
+	ctx.Data["UsersPageIsDisabled"] = setting.Service.Explore.DisableUsersPage
+	ctx.Data["OrganizationsPageIsDisabled"] = setting.Service.Explore.DisableOrganizationsPage
+	ctx.Data["CodePageIsDisabled"] = setting.Service.Explore.DisableCodePage
+	ctx.Data["Title"] = ctx.Tr("explore_title")
 	ctx.Data["PageIsExplore"] = true
+	ctx.Data["ShowRepoOwnerOnList"] = true
 	ctx.Data["PageIsExploreRepositories"] = true
 	ctx.Data["IsRepoIndexerEnabled"] = setting.Indexer.RepoIndexerEnabled
 

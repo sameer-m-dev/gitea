@@ -6,14 +6,16 @@ package doctor
 import (
 	"context"
 
-	actions_model "code.gitea.io/gitea/models/actions"
-	activities_model "code.gitea.io/gitea/models/activities"
-	"code.gitea.io/gitea/models/db"
-	issues_model "code.gitea.io/gitea/models/issues"
-	"code.gitea.io/gitea/models/migrations"
-	repo_model "code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/setting"
+	modelmigration "gitea.dev/modelmigration"
+	actions_model "gitea.dev/models/actions"
+	activities_model "gitea.dev/models/activities"
+	"gitea.dev/models/db"
+	issues_model "gitea.dev/models/issues"
+	repo_model "gitea.dev/models/repo"
+	secret_model "gitea.dev/models/secret"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/setting"
+	issue_service "gitea.dev/services/issue"
 )
 
 type consistencyCheck struct {
@@ -92,7 +94,7 @@ func prepareDBConsistencyChecks() []consistencyCheck {
 			// find issues without existing repository
 			Name:    "Orphaned Issues without existing repository",
 			Counter: issues_model.CountOrphanedIssues,
-			Fixer:   asFixer(issues_model.DeleteOrphanedIssues),
+			Fixer:   asFixer(issue_service.DeleteOrphanedIssues),
 		},
 		// find releases without existing repository
 		genericOrphanCheck("Orphaned Releases without existing repository",
@@ -164,6 +166,24 @@ func prepareDBConsistencyChecks() []consistencyCheck {
 			Fixer:        repo_model.DeleteOrphanedTopics,
 			FixedMessage: "Removed",
 		},
+		{
+			Name:         "Repository level Runners with non-zero owner_id",
+			Counter:      actions_model.CountWrongRepoLevelRunners,
+			Fixer:        actions_model.UpdateWrongRepoLevelRunners,
+			FixedMessage: "Corrected",
+		},
+		{
+			Name:         "Repository level Variables with non-zero owner_id",
+			Counter:      actions_model.CountWrongRepoLevelVariables,
+			Fixer:        actions_model.UpdateWrongRepoLevelVariables,
+			FixedMessage: "Corrected",
+		},
+		{
+			Name:         "Repository level Secrets with non-zero owner_id",
+			Counter:      secret_model.CountWrongRepoLevelSecrets,
+			Fixer:        secret_model.UpdateWrongRepoLevelSecrets,
+			FixedMessage: "Corrected",
+		},
 	}
 
 	// TODO: function to recalc all counters
@@ -202,6 +222,9 @@ func prepareDBConsistencyChecks() []consistencyCheck {
 		// find action without repository
 		genericOrphanCheck("Action entries without existing repository",
 			"action", "repository", "action.repo_id=repository.id"),
+		// find action runs without repository
+		genericOrphanCheck("Action runs without existing repository",
+			"action_run", "repository", "action_run.repo_id=repository.id"),
 		// find action without user
 		genericOrphanCheck("Action entries without existing user",
 			"action", "user", "action.act_user_id=`user`.id"),
@@ -229,7 +252,7 @@ func prepareDBConsistencyChecks() []consistencyCheck {
 
 func checkDBConsistency(ctx context.Context, logger log.Logger, autofix bool) error {
 	// make sure DB version is uptodate
-	if err := db.InitEngineWithMigration(ctx, migrations.EnsureUpToDate); err != nil {
+	if err := db.InitEngineWithMigration(ctx, modelmigration.EnsureUpToDate); err != nil {
 		logger.Critical("Model version on the database does not match the current Gitea version. Model consistency will not be checked until the database is upgraded")
 		return err
 	}

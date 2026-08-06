@@ -10,9 +10,9 @@ import (
 	"net/url"
 	"sort"
 
-	packages_model "code.gitea.io/gitea/models/packages"
-	npm_module "code.gitea.io/gitea/modules/packages/npm"
-	"code.gitea.io/gitea/modules/setting"
+	packages_model "gitea.dev/models/packages"
+	npm_module "gitea.dev/modules/packages/npm"
+	"gitea.dev/modules/setting"
 )
 
 func createPackageMetadataResponse(registryURL string, pds []*packages_model.PackageDescriptor) *npm_module.PackageMetadata {
@@ -67,9 +67,19 @@ func createPackageMetadataVersion(registryURL string, pd *packages_model.Package
 		BundleDependencies:   metadata.BundleDependencies,
 		DevDependencies:      metadata.DevelopmentDependencies,
 		PeerDependencies:     metadata.PeerDependencies,
+		PeerDependenciesMeta: metadata.PeerDependenciesMeta,
 		OptionalDependencies: metadata.OptionalDependencies,
 		Readme:               metadata.Readme,
 		Bin:                  metadata.Bin,
+		HasInstallScript:     metadata.HasInstallScript,
+		HasShrinkwrap:        metadata.HasShrinkwrap,
+		Engines:              metadata.Engines,
+		CPU:                  metadata.CPU,
+		OS:                   metadata.OS,
+		Directories:          metadata.Directories,
+		Funding:              metadata.Funding,
+		AcceptDependencies:   metadata.AcceptDependencies,
+		Deprecated:           metadata.Deprecated,
 		Dist: npm_module.PackageDistribution{
 			Shasum:    pd.Files[0].Blob.HashSHA1,
 			Integrity: "sha512-" + base64.StdEncoding.EncodeToString(hashBytes),

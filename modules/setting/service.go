@@ -5,13 +5,13 @@ package setting
 
 import (
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/structs"
-
-	"github.com/gobwas/glob"
+	"gitea.dev/modules/glob"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/structs"
 )
 
 // enumerates all the types of captchas
@@ -25,12 +25,9 @@ const (
 
 // Service settings
 var Service = struct {
-	DefaultUserVisibility                   string
-	DefaultUserVisibilityMode               structs.VisibleType
-	AllowedUserVisibilityModes              []string
-	AllowedUserVisibilityModesSlice         AllowedVisibility `ini:"-"`
-	DefaultOrgVisibility                    string
-	DefaultOrgVisibilityMode                structs.VisibleType
+	DefaultUserVisibilityMode               structs.VisibleType `ini:"-"`
+	AllowedUserVisibilityModesSlice         AllowedVisibility   `ini:"-"`
+	DefaultOrgVisibilityMode                structs.VisibleType `ini:"-"`
 	ActiveCodeLives                         int
 	ResetPwdCodeLives                       int
 	RegisterEmailConfirm                    bool
@@ -41,10 +38,13 @@ var Service = struct {
 	AllowOnlyInternalRegistration           bool
 	AllowOnlyExternalRegistration           bool
 	ShowRegistrationButton                  bool
+	EnablePasswordSignInForm                bool
 	ShowMilestonesDashboardPage             bool
-	RequireSignInView                       bool
+	RequireSignInViewStrict                 bool
+	BlockAnonymousAccessExpensive           bool
 	EnableNotifyMail                        bool
 	EnableBasicAuth                         bool
+	EnablePasskeyAuth                       bool
 	EnableReverseProxyAuth                  bool
 	EnableReverseProxyAuthAPI               bool
 	EnableReverseProxyAutoRegister          bool
@@ -90,9 +90,18 @@ var Service = struct {
 
 	// Explore page settings
 	Explore struct {
-		RequireSigninView bool `ini:"REQUIRE_SIGNIN_VIEW"`
-		DisableUsersPage  bool `ini:"DISABLE_USERS_PAGE"`
+		RequireSigninView        bool `ini:"REQUIRE_SIGNIN_VIEW"`
+		DisableUsersPage         bool `ini:"DISABLE_USERS_PAGE"`
+		DisableOrganizationsPage bool `ini:"DISABLE_ORGANIZATIONS_PAGE"`
+		DisableCodePage          bool `ini:"DISABLE_CODE_PAGE"`
 	} `ini:"service.explore"`
+
+	QoS struct {
+		Enabled             bool
+		MaxInFlightRequests int
+		MaxWaitingRequests  int
+		TargetWaitTime      time.Duration
+	}
 }{
 	AllowedUserVisibilityModesSlice: []bool{true, true, true},
 }
@@ -155,8 +164,21 @@ func loadServiceFrom(rootCfg ConfigProvider) {
 	Service.EmailDomainBlockList = CompileEmailGlobList(sec, "EMAIL_DOMAIN_BLOCKLIST")
 	Service.ShowRegistrationButton = sec.Key("SHOW_REGISTRATION_BUTTON").MustBool(!(Service.DisableRegistration || Service.AllowOnlyExternalRegistration))
 	Service.ShowMilestonesDashboardPage = sec.Key("SHOW_MILESTONES_DASHBOARD_PAGE").MustBool(true)
-	Service.RequireSignInView = sec.Key("REQUIRE_SIGNIN_VIEW").MustBool()
+
+	// boolean values are considered as "strict"
+	var err error
+	Service.RequireSignInViewStrict, err = sec.Key("REQUIRE_SIGNIN_VIEW").Bool()
+	if s := sec.Key("REQUIRE_SIGNIN_VIEW").String(); err != nil && s != "" {
+		// non-boolean value only supports "expensive" at the moment
+		Service.BlockAnonymousAccessExpensive = s == "expensive"
+		if !Service.BlockAnonymousAccessExpensive {
+			log.Fatal("Invalid config option: REQUIRE_SIGNIN_VIEW = %s", s)
+		}
+	}
+
 	Service.EnableBasicAuth = sec.Key("ENABLE_BASIC_AUTHENTICATION").MustBool(true)
+	Service.EnablePasswordSignInForm = sec.Key("ENABLE_PASSWORD_SIGNIN_FORM").MustBool(true)
+	Service.EnablePasskeyAuth = sec.Key("ENABLE_PASSKEY_AUTHENTICATION").MustBool(true)
 	Service.EnableReverseProxyAuth = sec.Key("ENABLE_REVERSE_PROXY_AUTHENTICATION").MustBool()
 	Service.EnableReverseProxyAuthAPI = sec.Key("ENABLE_REVERSE_PROXY_AUTHENTICATION_API").MustBool()
 	Service.EnableReverseProxyAutoRegister = sec.Key("ENABLE_REVERSE_PROXY_AUTO_REGISTRATION").MustBool()
@@ -192,36 +214,35 @@ func loadServiceFrom(rootCfg ConfigProvider) {
 	Service.EnableUserHeatmap = sec.Key("ENABLE_USER_HEATMAP").MustBool(true)
 	Service.AutoWatchNewRepos = sec.Key("AUTO_WATCH_NEW_REPOS").MustBool(true)
 	Service.AutoWatchOnChanges = sec.Key("AUTO_WATCH_ON_CHANGES").MustBool(false)
-	modes := sec.Key("ALLOWED_USER_VISIBILITY_MODES").Strings(",")
-	if len(modes) != 0 {
-		Service.AllowedUserVisibilityModes = []string{}
-		Service.AllowedUserVisibilityModesSlice = []bool{false, false, false}
-		for _, sMode := range modes {
-			if tp, ok := structs.VisibilityModes[sMode]; ok { // remove unsupported modes
-				Service.AllowedUserVisibilityModes = append(Service.AllowedUserVisibilityModes, sMode)
-				Service.AllowedUserVisibilityModesSlice[tp] = true
-			} else {
-				log.Warn("ALLOWED_USER_VISIBILITY_MODES %s is unsupported", sMode)
-			}
+
+	Service.AllowedUserVisibilityModesSlice = AllowedVisibility{false, false, false}
+	var allowedUserVisibilityModes []structs.VisibilityString
+	for _, allowedMode := range sec.Key("ALLOWED_USER_VISIBILITY_MODES").Strings(",") {
+		if tp, ok := structs.VisibilityModes[structs.VisibilityString(allowedMode)]; ok { // remove unsupported modes
+			allowedUserVisibilityModes = append(allowedUserVisibilityModes, structs.VisibilityString(allowedMode))
+			Service.AllowedUserVisibilityModesSlice[tp] = true
+		} else {
+			log.Warn("ALLOWED_USER_VISIBILITY_MODES %s is unsupported", allowedMode)
 		}
 	}
-
-	if len(Service.AllowedUserVisibilityModes) == 0 {
-		Service.AllowedUserVisibilityModes = []string{"public", "limited", "private"}
-		Service.AllowedUserVisibilityModesSlice = []bool{true, true, true}
+	if len(allowedUserVisibilityModes) == 0 {
+		allowedUserVisibilityModes = []structs.VisibilityString{structs.VisibilityStringPublic, structs.VisibilityStringLimited, structs.VisibilityStringPrivate}
+		Service.AllowedUserVisibilityModesSlice = AllowedVisibility{true, true, true}
 	}
 
-	Service.DefaultUserVisibility = sec.Key("DEFAULT_USER_VISIBILITY").String()
-	if Service.DefaultUserVisibility == "" {
-		Service.DefaultUserVisibility = Service.AllowedUserVisibilityModes[0]
-	} else if !Service.AllowedUserVisibilityModesSlice[structs.VisibilityModes[Service.DefaultUserVisibility]] {
-		log.Warn("DEFAULT_USER_VISIBILITY %s is wrong or not in ALLOWED_USER_VISIBILITY_MODES, using first allowed", Service.DefaultUserVisibility)
-		Service.DefaultUserVisibility = Service.AllowedUserVisibilityModes[0]
+	defaultUserVisibility := structs.VisibilityString(sec.Key("DEFAULT_USER_VISIBILITY").String())
+	if defaultUserVisibility == "" {
+		defaultUserVisibility = allowedUserVisibilityModes[0]
+	} else if vt, ok := structs.VisibilityModes[defaultUserVisibility]; !ok || !Service.AllowedUserVisibilityModesSlice[vt] {
+		log.Warn("DEFAULT_USER_VISIBILITY %s is wrong or not in ALLOWED_USER_VISIBILITY_MODES, using first allowed", defaultUserVisibility)
+		defaultUserVisibility = allowedUserVisibilityModes[0]
 	}
-	Service.DefaultUserVisibilityMode = structs.VisibilityModes[Service.DefaultUserVisibility]
-	Service.DefaultOrgVisibility = sec.Key("DEFAULT_ORG_VISIBILITY").In("public", structs.ExtractKeysFromMapString(structs.VisibilityModes))
-	Service.DefaultOrgVisibilityMode = structs.VisibilityModes[Service.DefaultOrgVisibility]
+	Service.DefaultUserVisibilityMode = structs.VisibilityModes[defaultUserVisibility]
+
+	defaultOrgVisibility := structs.VisibilityString(sec.Key("DEFAULT_ORG_VISIBILITY").In("public", structs.VisibilityModeKeys()))
+	Service.DefaultOrgVisibilityMode = structs.VisibilityModes[defaultOrgVisibility]
 	Service.DefaultOrgMemberVisible = sec.Key("DEFAULT_ORG_MEMBER_VISIBLE").MustBool()
+
 	Service.UserDeleteWithCommentsMaxTime = sec.Key("USER_DELETE_WITH_COMMENTS_MAX_TIME").MustDuration(0)
 	sec.Key("VALID_SITE_URL_SCHEMES").MustString("http,https")
 	Service.ValidSiteURLSchemes = sec.Key("VALID_SITE_URL_SCHEMES").Strings(",")
@@ -237,6 +258,7 @@ func loadServiceFrom(rootCfg ConfigProvider) {
 	mustMapSetting(rootCfg, "service.explore", &Service.Explore)
 
 	loadOpenIDSetting(rootCfg)
+	loadQosSetting(rootCfg)
 }
 
 func loadOpenIDSetting(rootCfg ConfigProvider) {
@@ -257,4 +279,12 @@ func loadOpenIDSetting(rootCfg ConfigProvider) {
 			Service.OpenIDBlacklist[i] = regexp.MustCompilePOSIX(p)
 		}
 	}
+}
+
+func loadQosSetting(rootCfg ConfigProvider) {
+	sec := rootCfg.Section("qos")
+	Service.QoS.Enabled = sec.Key("ENABLED").MustBool(false)
+	Service.QoS.MaxInFlightRequests = sec.Key("MAX_INFLIGHT").MustInt(4 * runtime.NumCPU())
+	Service.QoS.MaxWaitingRequests = sec.Key("MAX_WAITING").MustInt(100)
+	Service.QoS.TargetWaitTime = sec.Key("TARGET_WAIT_TIME").MustDuration(250 * time.Millisecond)
 }

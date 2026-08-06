@@ -8,8 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"code.gitea.io/gitea/modules/json"
-	"code.gitea.io/gitea/modules/log"
+	"gitea.dev/modules/json"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/util"
 )
 
 // SessionConfig defines Session settings
@@ -41,18 +42,26 @@ var SessionConfig = struct {
 
 func loadSessionFrom(rootCfg ConfigProvider) {
 	sec := rootCfg.Section("session")
-	SessionConfig.Provider = sec.Key("PROVIDER").In("memory",
-		[]string{"memory", "file", "redis", "mysql", "postgres", "couchbase", "memcache", "db"})
-	SessionConfig.ProviderConfig = strings.Trim(sec.Key("PROVIDER_CONFIG").MustString(filepath.Join(AppDataPath, "sessions")), "\" ")
-	if SessionConfig.Provider == "file" && !filepath.IsAbs(SessionConfig.ProviderConfig) {
-		SessionConfig.ProviderConfig = filepath.Join(AppWorkPath, SessionConfig.ProviderConfig)
+	SessionConfig.Provider = sec.Key("PROVIDER").In("memory", []string{"memory", "file", "redis", "mysql", "postgres", "couchbase", "memcache", "db"})
+
+	switch SessionConfig.Provider {
+	case "redis":
+		SessionConfig.ProviderConfig = sec.Key("PROVIDER_CONFIG").MustString(Redis.ConnStr)
+	case "file":
+		SessionConfig.ProviderConfig = sec.Key("PROVIDER_CONFIG").MustString(filepath.Join(AppDataPath, "sessions"))
+		if !filepath.IsAbs(SessionConfig.ProviderConfig) {
+			// Although the "data path" should be used as Gitea's "data" base directory (work path sometimes is not writable),
+			// document says the relative session path is based on the "work path", so keep the behavior
+			SessionConfig.ProviderConfig = filepath.Join(AppWorkPath, SessionConfig.ProviderConfig)
+		}
 		checkOverlappedPath("[session].PROVIDER_CONFIG", SessionConfig.ProviderConfig)
+	default:
+		SessionConfig.ProviderConfig = sec.Key("PROVIDER_CONFIG").String()
 	}
+
 	SessionConfig.CookieName = sec.Key("COOKIE_NAME").MustString("i_like_gitea")
-	SessionConfig.CookiePath = AppSubURL
-	if SessionConfig.CookiePath == "" {
-		SessionConfig.CookiePath = "/"
-	}
+	// HINT: INSTALL-PAGE-COOKIE-INIT: the cookie system is not properly initialized on the Install page, so there is no CookiePath
+	SessionConfig.CookiePath = util.IfZero(AppSubURL, "/")
 	SessionConfig.Secure = sec.Key("COOKIE_SECURE").MustBool(strings.HasPrefix(strings.ToLower(AppURL), "https://"))
 	SessionConfig.Gclifetime = sec.Key("GC_INTERVAL_TIME").MustInt64(86400)
 	SessionConfig.Maxlifetime = sec.Key("SESSION_LIFE_TIME").MustInt64(86400)
@@ -73,6 +82,4 @@ func loadSessionFrom(rootCfg ConfigProvider) {
 	SessionConfig.ProviderConfig = string(shadowConfig)
 	SessionConfig.OriginalProvider = SessionConfig.Provider
 	SessionConfig.Provider = "VirtualSession"
-
-	log.Info("Session Service Enabled")
 }

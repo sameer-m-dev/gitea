@@ -8,15 +8,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"strings"
 	"time"
 
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/util"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/util"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
@@ -70,7 +71,7 @@ func (a *azureBlobObject) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekCurrent:
 		offset += a.offset
 	case io.SeekEnd:
-		offset = a.Size - offset
+		offset = a.Size + offset
 	default:
 		return 0, errors.New("Seek: invalid whence")
 	}
@@ -114,7 +115,7 @@ func convertAzureBlobErr(err error) error {
 	if !errors.As(err, &respErr) {
 		return err
 	}
-	return fmt.Errorf(respErr.ErrorCode)
+	return fmt.Errorf("%s", respErr.ErrorCode)
 }
 
 // NewAzureBlobStorage returns a azure blob storage
@@ -246,15 +247,53 @@ func (a *AzureBlobStorage) Delete(path string) error {
 	return convertAzureBlobErr(err)
 }
 
-// URL gets the redirect URL to a file. The presigned link is valid for 5 minutes.
-func (a *AzureBlobStorage) URL(path, name string) (*url.URL, error) {
-	blobClient := a.getBlobClient(path)
+func (a *AzureBlobStorage) getSasURL(b *blob.Client, template sas.BlobSignatureValues) (string, error) {
+	urlParts, err := blob.ParseURL(b.URL())
+	if err != nil {
+		return "", err
+	}
 
-	startTime := time.Now()
-	u, err := blobClient.GetSASURL(sas.BlobPermissions{
-		Read: true,
-	}, time.Now().Add(5*time.Minute), &blob.GetSASURLOptions{
-		StartTime: &startTime,
+	var t time.Time
+	if urlParts.Snapshot == "" {
+		t = time.Time{}
+	} else {
+		t, err = time.Parse(blob.SnapshotTimeFormat, urlParts.Snapshot)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	template.ContainerName = urlParts.ContainerName
+	template.BlobName = urlParts.BlobName
+	template.SnapshotTime = t
+	template.Version = sas.Version
+
+	qps, err := template.SignWithSharedKey(a.credential)
+	if err != nil {
+		return "", err
+	}
+
+	endpoint := b.URL() + "?" + qps.Encode()
+
+	return endpoint, nil
+}
+
+func (a *AzureBlobStorage) ServeDirectURL(storePath, name, method string, reqParams *ServeDirectOptions) (*url.URL, error) {
+	blobClient := a.getBlobClient(storePath)
+
+	startTime := time.Now().UTC()
+
+	param := prepareServeDirectOptions(reqParams, name)
+
+	u, err := a.getSasURL(blobClient, sas.BlobSignatureValues{
+		Permissions: (&sas.BlobPermissions{
+			Read:  method == http.MethodGet || method == http.MethodHead,
+			Write: method == http.MethodPut,
+		}).String(),
+		StartTime:          startTime,
+		ExpiryTime:         startTime.Add(5 * time.Minute),
+		ContentDisposition: param.ContentDisposition,
+		ContentType:        param.ContentType,
 	})
 	if err != nil {
 		return nil, convertAzureBlobErr(err)

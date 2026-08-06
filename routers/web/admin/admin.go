@@ -12,33 +12,35 @@ import (
 	"strings"
 	"time"
 
-	activities_model "code.gitea.io/gitea/models/activities"
-	"code.gitea.io/gitea/models/db"
-	"code.gitea.io/gitea/modules/base"
-	"code.gitea.io/gitea/modules/cache"
-	"code.gitea.io/gitea/modules/graceful"
-	"code.gitea.io/gitea/modules/httplib"
-	"code.gitea.io/gitea/modules/json"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/updatechecker"
-	"code.gitea.io/gitea/modules/web"
-	"code.gitea.io/gitea/services/context"
-	"code.gitea.io/gitea/services/cron"
-	"code.gitea.io/gitea/services/forms"
-	release_service "code.gitea.io/gitea/services/release"
-	repo_service "code.gitea.io/gitea/services/repository"
+	activities_model "gitea.dev/models/activities"
+	"gitea.dev/models/db"
+	"gitea.dev/modules/base"
+	"gitea.dev/modules/cache"
+	"gitea.dev/modules/graceful"
+	"gitea.dev/modules/httplib"
+	"gitea.dev/modules/json"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/templates"
+	"gitea.dev/modules/updatechecker"
+	"gitea.dev/modules/web"
+	"gitea.dev/services/context"
+	"gitea.dev/services/cron"
+	"gitea.dev/services/forms"
+	release_service "gitea.dev/services/release"
+	repo_service "gitea.dev/services/repository"
 )
 
 const (
-	tplDashboard    base.TplName = "admin/dashboard"
-	tplSystemStatus base.TplName = "admin/system_status"
-	tplSelfCheck    base.TplName = "admin/self_check"
-	tplCron         base.TplName = "admin/cron"
-	tplQueue        base.TplName = "admin/queue"
-	tplStacktrace   base.TplName = "admin/stacktrace"
-	tplQueueManage  base.TplName = "admin/queue_manage"
-	tplStats        base.TplName = "admin/stats"
+	tplDashboard    templates.TplName = "admin/dashboard"
+	tplSystemStatus templates.TplName = "admin/system_status"
+	tplSelfCheck    templates.TplName = "admin/self_check"
+	tplCron         templates.TplName = "admin/cron"
+	tplQueue        templates.TplName = "admin/queue"
+	tplPerfTrace    templates.TplName = "admin/perftrace"
+	tplStacktrace   templates.TplName = "admin/stacktrace"
+	tplQueueManage  templates.TplName = "admin/queue_manage"
+	tplStats        templates.TplName = "admin/stats"
 )
 
 var sysStatus struct {
@@ -185,9 +187,9 @@ func DashboardPost(ctx *context.Context) {
 		}
 	}
 	if form.From == "monitor" {
-		ctx.Redirect(setting.AppSubURL + "/admin/monitor/cron")
+		ctx.Redirect(setting.AppSubURL + "/-/admin/monitor/cron")
 	} else {
-		ctx.Redirect(setting.AppSubURL + "/admin")
+		ctx.Redirect(setting.AppSubURL + "/-/admin")
 	}
 }
 

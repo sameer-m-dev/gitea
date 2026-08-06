@@ -4,7 +4,7 @@
 package swagger
 
 import (
-	api "code.gitea.io/gitea/modules/structs"
+	api "gitea.dev/modules/structs"
 )
 
 // Repository
@@ -82,13 +82,6 @@ type swaggerResponseTagProtectionList struct {
 type swaggerResponseTagProtection struct {
 	// in:body
 	Body api.TagProtection `json:"body"`
-}
-
-// Reference
-// swagger:response Reference
-type swaggerResponseReference struct {
-	// in:body
-	Body api.Reference `json:"body"`
 }
 
 // ReferenceList
@@ -331,6 +324,12 @@ type swaggerContentsListResponse struct {
 	Body []api.ContentsResponse `json:"body"`
 }
 
+// swagger:response ContentsExtResponse
+type swaggerContentsExtResponse struct {
+	// in:body
+	Body api.ContentsExtResponse `json:"body"`
+}
+
 // FileDeleteResponse
 // swagger:response FileDeleteResponse
 type swaggerFileDeleteResponse struct {
@@ -342,7 +341,7 @@ type swaggerFileDeleteResponse struct {
 // swagger:response TopicListResponse
 type swaggerTopicListResponse struct {
 	// in: body
-	Body []api.TopicResponse `json:"body"`
+	Body api.TopicListResponse `json:"body"`
 }
 
 // TopicNames
@@ -357,6 +356,13 @@ type swaggerTopicNames struct {
 type swaggerLanguageStatistics struct {
 	// in: body
 	Body map[string]int64 `json:"body"`
+}
+
+// LicensesList
+// swagger:response LicensesList
+type swaggerLicensesList struct {
+	// in: body
+	Body []string `json:"body"`
 }
 
 // CombinedStatus
@@ -436,8 +442,70 @@ type swaggerRepoTasksList struct {
 	Body api.ActionTaskResponse `json:"body"`
 }
 
+// WorkflowRunsList
+// swagger:response WorkflowRunsList
+type swaggerActionWorkflowRunsResponse struct {
+	// in:body
+	Body api.ActionWorkflowRunsResponse `json:"body"`
+}
+
+// WorkflowRun
+// swagger:response WorkflowRun
+type swaggerWorkflowRun struct {
+	// in:body
+	Body api.ActionWorkflowRun `json:"body"`
+}
+
+// WorkflowJobsList
+// swagger:response WorkflowJobsList
+type swaggerActionWorkflowJobsResponse struct {
+	// in:body
+	Body api.ActionWorkflowJobsResponse `json:"body"`
+}
+
+// WorkflowJob
+// swagger:response WorkflowJob
+type swaggerWorkflowJob struct {
+	// in:body
+	Body api.ActionWorkflowJob `json:"body"`
+}
+
+// ArtifactsList
+// swagger:response ArtifactsList
+type swaggerRepoArtifactsList struct {
+	// in:body
+	Body api.ActionArtifactsResponse `json:"body"`
+}
+
+// Artifact
+// swagger:response Artifact
+type swaggerRepoArtifact struct {
+	// in:body
+	Body api.ActionArtifact `json:"body"`
+}
+
+// RunnerList
+// swagger:response RunnerList
+type swaggerRunnerList struct {
+	// in:body
+	Body api.ActionRunnersResponse `json:"body"`
+}
+
+// Runner
+// swagger:response Runner
+type swaggerRunner struct {
+	// in:body
+	Body api.ActionRunner `json:"body"`
+}
+
 // swagger:response Compare
 type swaggerCompare struct {
 	// in:body
 	Body api.Compare `json:"body"`
+}
+
+// swagger:response MergeUpstreamResponse
+type swaggerMergeUpstreamResponse struct {
+	// in:body
+	Body api.MergeUpstreamResponse `json:"body"`
 }

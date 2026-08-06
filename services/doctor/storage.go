@@ -9,16 +9,16 @@ import (
 	"io/fs"
 	"strings"
 
-	"code.gitea.io/gitea/models/git"
-	"code.gitea.io/gitea/models/packages"
-	"code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/base"
-	"code.gitea.io/gitea/modules/log"
-	packages_module "code.gitea.io/gitea/modules/packages"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/storage"
-	"code.gitea.io/gitea/modules/util"
+	"gitea.dev/models/git"
+	"gitea.dev/models/packages"
+	"gitea.dev/models/repo"
+	"gitea.dev/models/user"
+	"gitea.dev/modules/base"
+	"gitea.dev/modules/log"
+	packages_module "gitea.dev/modules/packages"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/storage"
+	"gitea.dev/modules/util"
 )
 
 type commonStorageCheckOptions struct {
@@ -121,7 +121,7 @@ func checkStorage(opts *checkStorageOptions) func(ctx context.Context, logger lo
 					storer: storage.LFS,
 					isOrphaned: func(path string, obj storage.Object, stat fs.FileInfo) (bool, error) {
 						// The oid of an LFS stored object is the name but with all the path.Separators removed
-						oid := strings.ReplaceAll(path, "/", "")
+						oid := strings.ReplaceAll(strings.ReplaceAll(path, "\\", ""), "/", "")
 						exists, err := git.ExistsLFSObject(ctx, oid)
 						return !exists, err
 					},

@@ -8,18 +8,16 @@ import (
 	"net/http"
 	"strings"
 
-	"code.gitea.io/gitea/models/organization"
-	"code.gitea.io/gitea/models/perm"
-	repo_model "code.gitea.io/gitea/models/repo"
-	unit_model "code.gitea.io/gitea/models/unit"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/log"
-	repo_module "code.gitea.io/gitea/modules/repository"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/services/context"
-	"code.gitea.io/gitea/services/mailer"
-	org_service "code.gitea.io/gitea/services/org"
-	repo_service "code.gitea.io/gitea/services/repository"
+	"gitea.dev/models/organization"
+	"gitea.dev/models/perm"
+	repo_model "gitea.dev/models/repo"
+	unit_model "gitea.dev/models/unit"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/setting"
+	"gitea.dev/services/context"
+	"gitea.dev/services/mailer"
+	repo_service "gitea.dev/services/repository"
 )
 
 // Collaboration render a repository's collaboration page
@@ -34,7 +32,7 @@ func Collaboration(ctx *context.Context) {
 	}
 	ctx.Data["Collaborators"] = users
 
-	teams, err := organization.GetRepoTeams(ctx, ctx.Repo.Repository)
+	teams, err := organization.GetRepoTeams(ctx, ctx.Repo.Repository.OwnerID, ctx.Repo.Repository.ID)
 	if err != nil {
 		ctx.ServerError("GetRepoTeams", err)
 		return
@@ -100,12 +98,12 @@ func CollaborationPost(ctx *context.Context) {
 		}
 	}
 
-	if err = repo_module.AddCollaborator(ctx, ctx.Repo.Repository, u); err != nil {
+	if err = repo_service.AddOrUpdateCollaborator(ctx, ctx.Repo.Repository, u, perm.AccessModeWrite); err != nil {
 		if errors.Is(err, user_model.ErrBlockedUser) {
 			ctx.Flash.Error(ctx.Tr("repo.settings.add_collaborator.blocked_user"))
 			ctx.Redirect(ctx.Repo.RepoLink + "/settings/collaboration")
 		} else {
-			ctx.ServerError("AddCollaborator", err)
+			ctx.ServerError("AddOrUpdateCollaborator", err)
 		}
 		return
 	}
@@ -151,7 +149,7 @@ func DeleteCollaboration(ctx *context.Context) {
 
 // AddTeamPost response for adding a team to a repository
 func AddTeamPost(ctx *context.Context) {
-	if !ctx.Repo.Owner.RepoAdminChangeTeamAccess && !ctx.Repo.IsOwner() {
+	if !ctx.Repo.Owner.RepoAdminChangeTeamAccess && !ctx.Repo.Permission.IsOwner() {
 		ctx.Flash.Error(ctx.Tr("repo.settings.change_team_access_not_allowed"))
 		ctx.Redirect(ctx.Repo.RepoLink + "/settings/collaboration")
 		return
@@ -186,7 +184,7 @@ func AddTeamPost(ctx *context.Context) {
 		return
 	}
 
-	if err = org_service.TeamAddRepository(ctx, team, ctx.Repo.Repository); err != nil {
+	if err = repo_service.TeamAddRepository(ctx, team, ctx.Repo.Repository); err != nil {
 		ctx.ServerError("TeamAddRepository", err)
 		return
 	}
@@ -197,7 +195,7 @@ func AddTeamPost(ctx *context.Context) {
 
 // DeleteTeam response for deleting a team from a repository
 func DeleteTeam(ctx *context.Context) {
-	if !ctx.Repo.Owner.RepoAdminChangeTeamAccess && !ctx.Repo.IsOwner() {
+	if !ctx.Repo.Owner.RepoAdminChangeTeamAccess && !ctx.Repo.Permission.IsOwner() {
 		ctx.Flash.Error(ctx.Tr("repo.settings.change_team_access_not_allowed"))
 		ctx.Redirect(ctx.Repo.RepoLink + "/settings/collaboration")
 		return
@@ -210,7 +208,7 @@ func DeleteTeam(ctx *context.Context) {
 	}
 
 	if err = repo_service.RemoveRepositoryFromTeam(ctx, team, ctx.Repo.Repository.ID); err != nil {
-		ctx.ServerError("team.RemoveRepositorys", err)
+		ctx.ServerError("team.RemoveRepositories", err)
 		return
 	}
 

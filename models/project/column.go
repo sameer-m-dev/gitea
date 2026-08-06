@@ -9,10 +9,10 @@ import (
 	"fmt"
 	"regexp"
 
-	"code.gitea.io/gitea/models/db"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/timeutil"
-	"code.gitea.io/gitea/modules/util"
+	"gitea.dev/models/db"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/timeutil"
+	"gitea.dev/modules/util"
 
 	"xorm.io/builder"
 )
@@ -48,6 +48,8 @@ type Column struct {
 	ProjectID int64 `xorm:"INDEX NOT NULL"`
 	CreatorID int64 `xorm:"NOT NULL"`
 
+	NumIssues int64 `xorm:"-"`
+
 	CreatedUnix timeutil.TimeStamp `xorm:"INDEX created"`
 	UpdatedUnix timeutil.TimeStamp `xorm:"INDEX updated"`
 }
@@ -55,20 +57,6 @@ type Column struct {
 // TableName return the real table name
 func (Column) TableName() string {
 	return "project_board" // TODO: the legacy table name should be project_column
-}
-
-// NumIssues return counter of all issues assigned to the column
-func (c *Column) NumIssues(ctx context.Context) int {
-	total, err := db.GetEngine(ctx).Table("project_issue").
-		Where("project_id=?", c.ProjectID).
-		And("project_board_id=?", c.ID).
-		GroupBy("issue_id").
-		Cols("issue_id").
-		Count()
-	if err != nil {
-		return 0
-	}
-	return int(total)
 }
 
 func (c *Column) GetIssues(ctx context.Context) ([]*ProjectIssue, error) {
@@ -159,7 +147,7 @@ func NewColumn(ctx context.Context, column *Column) error {
 		return err
 	}
 	if res.ColumnCount >= maxProjectColumns {
-		return fmt.Errorf("NewBoard: maximum number of columns reached")
+		return errors.New("NewBoard: maximum number of columns reached")
 	}
 	column.Sorting = int8(util.Iif(res.ColumnCount > 0, res.MaxSorting+1, 0))
 	_, err := db.GetEngine(ctx).Insert(column)
@@ -184,7 +172,7 @@ func deleteColumnByID(ctx context.Context, columnID int64) error {
 	}
 
 	if column.Default {
-		return fmt.Errorf("deleteColumnByID: cannot delete default column")
+		return errors.New("deleteColumnByID: cannot delete default column")
 	}
 
 	// move all issues to the default column
@@ -192,12 +180,12 @@ func deleteColumnByID(ctx context.Context, columnID int64) error {
 	if err != nil {
 		return err
 	}
-	defaultColumn, err := project.GetDefaultColumn(ctx)
+	defaultColumn, err := project.MustDefaultColumn(ctx)
 	if err != nil {
 		return err
 	}
 
-	if err = column.moveIssuesToAnotherColumn(ctx, defaultColumn); err != nil {
+	if err = moveIssuesToAnotherColumn(ctx, column, defaultColumn); err != nil {
 		return err
 	}
 
@@ -216,6 +204,18 @@ func deleteColumnByProjectID(ctx context.Context, projectID int64) error {
 func GetColumn(ctx context.Context, columnID int64) (*Column, error) {
 	column := new(Column)
 	has, err := db.GetEngine(ctx).ID(columnID).Get(column)
+	if err != nil {
+		return nil, err
+	} else if !has {
+		return nil, ErrProjectColumnNotExist{ColumnID: columnID}
+	}
+
+	return column, nil
+}
+
+func GetColumnByIDAndProjectID(ctx context.Context, columnID, projectID int64) (*Column, error) {
+	column := new(Column)
+	has, err := db.GetEngine(ctx).ID(columnID).And("project_id=?", projectID).Get(column)
 	if err != nil {
 		return nil, err
 	} else if !has {
@@ -257,9 +257,12 @@ func (p *Project) GetColumns(ctx context.Context) (ColumnList, error) {
 	return columns, nil
 }
 
-// GetDefaultColumn return default column and ensure only one exists
-func (p *Project) GetDefaultColumn(ctx context.Context) (*Column, error) {
+// getDefaultColumnWithFallback return default column if one exists
+// otherwise return the first column by sorting and set it as default column
+func (p *Project) getDefaultColumnWithFallback(ctx context.Context) (*Column, error) {
 	var column Column
+
+	// try to find a column "default=true"
 	has, err := db.GetEngine(ctx).
 		Where("project_id=? AND `default` = ?", p.ID, true).
 		Desc("id").Get(&column)
@@ -271,8 +274,37 @@ func (p *Project) GetDefaultColumn(ctx context.Context) (*Column, error) {
 		return &column, nil
 	}
 
+	// try to find the first column by sorting
+	has, err = db.GetEngine(ctx).Where("project_id=?", p.ID).OrderBy("sorting, id").Get(&column)
+	if err != nil {
+		return nil, err
+	}
+	if has {
+		column.Default = true
+		if _, err := db.GetEngine(ctx).ID(column.ID).Cols("`default`").Update(&column); err != nil {
+			return nil, err
+		}
+		return &column, nil
+	}
+
+	return nil, ErrProjectColumnNotExist{ColumnID: 0}
+}
+
+// MustDefaultColumn returns the default column for a project.
+// If one exists, it is returned
+// If none exists, the first column will be elevated to the default column of this project
+// If there is no column, it creates a default column and returns it
+func (p *Project) MustDefaultColumn(ctx context.Context) (*Column, error) {
+	c, err := p.getDefaultColumnWithFallback(ctx)
+	if err != nil && !IsErrProjectColumnNotExist(err) {
+		return nil, err
+	}
+	if c != nil {
+		return c, nil
+	}
+
 	// create a default column if none is found
-	column = Column{
+	column := Column{
 		ProjectID: p.ID,
 		Default:   true,
 		Title:     "Uncategorized",
@@ -305,22 +337,11 @@ func SetDefaultColumn(ctx context.Context, projectID, columnID int64) error {
 	})
 }
 
-// UpdateColumnSorting update project column sorting
-func UpdateColumnSorting(ctx context.Context, cl ColumnList) error {
-	return db.WithTx(ctx, func(ctx context.Context) error {
-		for i := range cl {
-			if _, err := db.GetEngine(ctx).ID(cl[i].ID).Cols(
-				"sorting",
-			).Update(cl[i]); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
 func GetColumnsByIDs(ctx context.Context, projectID int64, columnsIDs []int64) (ColumnList, error) {
 	columns := make([]*Column, 0, 5)
+	if len(columnsIDs) == 0 {
+		return columns, nil
+	}
 	if err := db.GetEngine(ctx).
 		Where("project_id =?", projectID).
 		In("id", columnsIDs).

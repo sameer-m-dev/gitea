@@ -6,7 +6,7 @@ package markdown
 import (
 	"fmt"
 
-	"code.gitea.io/gitea/modules/markup"
+	"gitea.dev/modules/markup"
 
 	"github.com/yuin/goldmark/ast"
 	east "github.com/yuin/goldmark/extension/ast"
@@ -72,7 +72,7 @@ func (g *ASTTransformer) transformList(_ *markup.RenderContext, v *ast.List, rc 
 			}
 			newChild := NewTaskCheckBoxListItem(listItem)
 			newChild.IsChecked = taskCheckBox.IsChecked
-			newChild.SetAttributeString("class", []byte("task-list-item"))
+			newChild.SetAttributeString(g.renderInternal.SafeAttr("class"), []byte(g.renderInternal.SafeValue("task-list-item")))
 			segments := newChild.FirstChild().Lines()
 			if segments.Len() > 0 {
 				segment := segments.At(0)
@@ -81,5 +81,16 @@ func (g *ASTTransformer) transformList(_ *markup.RenderContext, v *ast.List, rc 
 			v.AppendChild(v, newChild)
 		}
 	}
-	g.applyElementDir(v)
+
+	nestedList := false
+	for p := v.Parent(); p != nil; p = p.Parent() {
+		if _, ok := p.(*ast.List); ok {
+			nestedList = true
+			break
+		}
+	}
+	if !nestedList {
+		// "dir=auto" should be only added to top-level "ul". https://github.com/go-gitea/gitea/issues/35058
+		g.applyElementDir(v)
+	}
 }
