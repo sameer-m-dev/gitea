@@ -6,15 +6,15 @@ package activities
 import (
 	"context"
 
-	"code.gitea.io/gitea/models/db"
-	issues_model "code.gitea.io/gitea/models/issues"
-	access_model "code.gitea.io/gitea/models/perm/access"
-	repo_model "code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/models/unit"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/container"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/util"
+	"gitea.dev/models/db"
+	issues_model "gitea.dev/models/issues"
+	access_model "gitea.dev/models/perm/access"
+	repo_model "gitea.dev/models/repo"
+	"gitea.dev/models/unit"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/container"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/util"
 
 	"xorm.io/builder"
 )
@@ -69,33 +69,30 @@ func (opts FindNotificationOptions) ToOrders() string {
 // CreateOrUpdateIssueNotifications creates an issue notification
 // for each watcher, or updates it if already exists
 // receiverID > 0 just send to receiver, else send to all watcher
-func CreateOrUpdateIssueNotifications(ctx context.Context, issueID, commentID, notificationAuthorID, receiverID int64) error {
-	ctx, committer, err := db.TxContext(ctx)
-	if err != nil {
-		return err
-	}
-	defer committer.Close()
-
-	if err := createOrUpdateIssueNotifications(ctx, issueID, commentID, notificationAuthorID, receiverID); err != nil {
-		return err
-	}
-
-	return committer.Commit()
+// Returns the set of user IDs whose notification rows were created or updated.
+func CreateOrUpdateIssueNotifications(ctx context.Context, issueID, commentID, notificationAuthorID, receiverID int64) ([]int64, error) {
+	var notifiedIDs []int64
+	err := db.WithTx(ctx, func(ctx context.Context) error {
+		var innerErr error
+		notifiedIDs, innerErr = createOrUpdateIssueNotifications(ctx, issueID, commentID, notificationAuthorID, receiverID)
+		return innerErr
+	})
+	return notifiedIDs, err
 }
 
-func createOrUpdateIssueNotifications(ctx context.Context, issueID, commentID, notificationAuthorID, receiverID int64) error {
+func createOrUpdateIssueNotifications(ctx context.Context, issueID, commentID, notificationAuthorID, receiverID int64) ([]int64, error) {
 	// init
 	var toNotify container.Set[int64]
 	notifications, err := db.Find[Notification](ctx, FindNotificationOptions{
 		IssueID: issueID,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	issue, err := issues_model.GetIssueByID(ctx, issueID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if receiverID > 0 {
@@ -105,40 +102,40 @@ func createOrUpdateIssueNotifications(ctx context.Context, issueID, commentID, n
 		toNotify = make(container.Set[int64], 32)
 		issueWatches, err := issues_model.GetIssueWatchersIDs(ctx, issueID, true)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		toNotify.AddMultiple(issueWatches...)
 		if !(issue.IsPull && issues_model.HasWorkInProgressPrefix(issue.Title)) {
 			repoWatches, err := repo_model.GetRepoWatchersIDs(ctx, issue.RepoID)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			toNotify.AddMultiple(repoWatches...)
 		}
 		issueParticipants, err := issue.GetParticipantIDsByIssue(ctx)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		toNotify.AddMultiple(issueParticipants...)
 
-		// dont notify user who cause notification
+		// don't notify user who cause notification
 		delete(toNotify, notificationAuthorID)
 		// explicit unwatch on issue
 		issueUnWatches, err := issues_model.GetIssueWatchersIDs(ctx, issueID, false)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for _, id := range issueUnWatches {
 			toNotify.Remove(id)
 		}
 	}
 
-	err = issue.LoadRepo(ctx)
-	if err != nil {
-		return err
+	if err := issue.LoadRepo(ctx); err != nil {
+		return nil, err
 	}
 
 	// notify
+	notifiedIDs := make([]int64, 0, len(toNotify))
 	for userID := range toNotify {
 		issue.Repo.Units = nil
 		user, err := user_model.GetUserByID(ctx, userID)
@@ -147,7 +144,7 @@ func createOrUpdateIssueNotifications(ctx context.Context, issueID, commentID, n
 				continue
 			}
 
-			return err
+			return nil, err
 		}
 		if issue.IsPull && !access_model.CheckRepoUnitUser(ctx, issue.Repo, user, unit.TypePullRequests) {
 			continue
@@ -157,16 +154,16 @@ func createOrUpdateIssueNotifications(ctx context.Context, issueID, commentID, n
 		}
 
 		if notificationExists(notifications, issue.ID, userID) {
-			if err = updateIssueNotification(ctx, userID, issue.ID, commentID, notificationAuthorID); err != nil {
-				return err
-			}
-			continue
+			err = updateIssueNotification(ctx, userID, issue.ID, commentID, notificationAuthorID)
+		} else {
+			err = createIssueNotification(ctx, userID, issue, commentID, notificationAuthorID)
 		}
-		if err = createIssueNotification(ctx, userID, issue, commentID, notificationAuthorID); err != nil {
-			return err
+		if err != nil {
+			return nil, err
 		}
+		notifiedIDs = append(notifiedIDs, userID)
 	}
-	return nil
+	return notifiedIDs, nil
 }
 
 // NotificationList contains a list of notifications
@@ -190,14 +187,12 @@ func (nl NotificationList) LoadAttributes(ctx context.Context) error {
 }
 
 func (nl NotificationList) getPendingRepoIDs() []int64 {
-	ids := make(container.Set[int64], len(nl))
-	for _, notification := range nl {
-		if notification.Repository != nil {
-			continue
+	return container.FilterSlice(nl, func(n *Notification) (int64, bool) {
+		if n.Repository != nil {
+			return 0, false
 		}
-		ids.Add(notification.RepoID)
-	}
-	return ids.Values()
+		return n.RepoID, true
+	})
 }
 
 // LoadRepos loads repositories from database
@@ -210,10 +205,7 @@ func (nl NotificationList) LoadRepos(ctx context.Context) (repo_model.Repository
 	repos := make(map[int64]*repo_model.Repository, len(repoIDs))
 	left := len(repoIDs)
 	for left > 0 {
-		limit := db.DefaultMaxInSize
-		if left < limit {
-			limit = left
-		}
+		limit := min(left, db.DefaultMaxInSize)
 		rows, err := db.GetEngine(ctx).
 			In("id", repoIDs[:limit]).
 			Rows(new(repo_model.Repository))
@@ -284,10 +276,7 @@ func (nl NotificationList) LoadIssues(ctx context.Context) ([]int, error) {
 	issues := make(map[int64]*issues_model.Issue, len(issueIDs))
 	left := len(issueIDs)
 	for left > 0 {
-		limit := db.DefaultMaxInSize
-		if left < limit {
-			limit = left
-		}
+		limit := min(left, db.DefaultMaxInSize)
 		rows, err := db.GetEngine(ctx).
 			In("id", issueIDs[:limit]).
 			Rows(new(issues_model.Issue))
@@ -379,10 +368,7 @@ func (nl NotificationList) LoadUsers(ctx context.Context) ([]int, error) {
 	users := make(map[int64]*user_model.User, len(userIDs))
 	left := len(userIDs)
 	for left > 0 {
-		limit := db.DefaultMaxInSize
-		if left < limit {
-			limit = left
-		}
+		limit := min(left, db.DefaultMaxInSize)
 		rows, err := db.GetEngine(ctx).
 			In("id", userIDs[:limit]).
 			Rows(new(user_model.User))
@@ -430,10 +416,7 @@ func (nl NotificationList) LoadComments(ctx context.Context) ([]int, error) {
 	comments := make(map[int64]*issues_model.Comment, len(commentIDs))
 	left := len(commentIDs)
 	for left > 0 {
-		limit := db.DefaultMaxInSize
-		if left < limit {
-			limit = left
-		}
+		limit := min(left, db.DefaultMaxInSize)
 		rows, err := db.GetEngine(ctx).
 			In("id", commentIDs[:limit]).
 			Rows(new(issues_model.Comment))

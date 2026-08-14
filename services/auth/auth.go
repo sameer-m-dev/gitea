@@ -5,60 +5,37 @@
 package auth
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
-	"regexp"
-	"strings"
 
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/auth/webauthn"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/optional"
-	"code.gitea.io/gitea/modules/session"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/web/middleware"
-	gitea_context "code.gitea.io/gitea/services/context"
-	user_service "code.gitea.io/gitea/services/user"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/auth/webauthn"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/optional"
+	"gitea.dev/modules/session"
+	"gitea.dev/modules/web/middleware"
+	user_service "gitea.dev/services/user"
 )
+
+type ErrUserAuthMessage string
+
+func (e ErrUserAuthMessage) Error() string {
+	return string(e)
+}
+
+func ErrAsUserAuthMessage(err error) (string, bool) {
+	var msg ErrUserAuthMessage
+	if errors.As(err, &msg) {
+		return msg.Error(), true
+	}
+	return "", false
+}
 
 // Init should be called exactly once when the application starts to allow plugins
 // to allocate necessary resources
 func Init() {
 	webauthn.Init()
-}
-
-// isAttachmentDownload check if request is a file download (GET) with URL to an attachment
-func isAttachmentDownload(req *http.Request) bool {
-	return strings.HasPrefix(req.URL.Path, "/attachments/") && req.Method == "GET"
-}
-
-// isContainerPath checks if the request targets the container endpoint
-func isContainerPath(req *http.Request) bool {
-	return strings.HasPrefix(req.URL.Path, "/v2/")
-}
-
-var (
-	gitRawOrAttachPathRe = regexp.MustCompile(`^/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+/(?:(?:git-(?:(?:upload)|(?:receive))-pack$)|(?:info/refs$)|(?:HEAD$)|(?:objects/)|(?:raw/)|(?:releases/download/)|(?:attachments/))`)
-	lfsPathRe            = regexp.MustCompile(`^/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+/info/lfs/`)
-	archivePathRe        = regexp.MustCompile(`^/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+/archive/`)
-)
-
-func isGitRawOrAttachPath(req *http.Request) bool {
-	return gitRawOrAttachPathRe.MatchString(req.URL.Path)
-}
-
-func isGitRawOrAttachOrLFSPath(req *http.Request) bool {
-	if isGitRawOrAttachPath(req) {
-		return true
-	}
-	if setting.LFS.StartServer {
-		return lfsPathRe.MatchString(req.URL.Path)
-	}
-	return false
-}
-
-func isArchivePath(req *http.Request) bool {
-	return archivePathRe.MatchString(req.URL.Path)
 }
 
 // handleSignIn clears existing session variables and stores new ones for the specified user object
@@ -71,19 +48,8 @@ func handleSignIn(resp http.ResponseWriter, req *http.Request, sess SessionStore
 		sess = newSess
 	}
 
-	_ = sess.Delete("openid_verified_uri")
-	_ = sess.Delete("openid_signin_remember")
-	_ = sess.Delete("openid_determined_email")
-	_ = sess.Delete("openid_determined_username")
-	_ = sess.Delete("twofaUid")
-	_ = sess.Delete("twofaRemember")
-	_ = sess.Delete("webauthnAssertion")
-	_ = sess.Delete("linkAccount")
-	err = sess.Set("uid", user.ID)
-	if err != nil {
-		log.Error(fmt.Sprintf("Error setting session: %v", err))
-	}
-	err = sess.Set("uname", user.Name)
+	ClearSessionKeysForSignIn(sess)
+	err = sess.Set(session.KeyUID, user.ID)
 	if err != nil {
 		log.Error(fmt.Sprintf("Error setting session: %v", err))
 	}
@@ -102,9 +68,4 @@ func handleSignIn(resp http.ResponseWriter, req *http.Request, sess SessionStore
 	}
 
 	middleware.SetLocaleCookie(resp, user.Language, 0)
-
-	// Clear whatever CSRF has right now, force to generate a new one
-	if ctx := gitea_context.GetWebContext(req); ctx != nil {
-		ctx.Csrf.DeleteCookie(ctx)
-	}
 }

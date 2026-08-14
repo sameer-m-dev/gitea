@@ -4,9 +4,9 @@
 package optional
 
 import (
-	"code.gitea.io/gitea/modules/json"
+	"gitea.dev/modules/json"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 func (o *Option[T]) UnmarshalJSON(data []byte) error {
@@ -35,9 +35,9 @@ func (o *Option[T]) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-func (o Option[T]) MarshalYAML() (interface{}, error) {
+func (o Option[T]) MarshalYAML() (any, error) {
 	if !o.Has() {
-		return nil, nil
+		return nil, nil //nolint:nilnil // return nil to indicate no value to marshal
 	}
 
 	value := new(yaml.Node)

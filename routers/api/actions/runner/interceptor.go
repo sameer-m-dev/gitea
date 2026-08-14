@@ -8,12 +8,13 @@ import (
 	"crypto/subtle"
 	"errors"
 	"strings"
+	"time"
 
-	actions_model "code.gitea.io/gitea/models/actions"
-	auth_model "code.gitea.io/gitea/models/auth"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/timeutil"
-	"code.gitea.io/gitea/modules/util"
+	actions_model "gitea.dev/models/actions"
+	auth_model "gitea.dev/models/auth"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/timeutil"
+	"gitea.dev/modules/util"
 
 	"connectrpc.com/connect"
 	"google.golang.org/grpc/codes"
@@ -23,8 +24,6 @@ import (
 const (
 	uuidHeaderKey  = "x-runner-uuid"
 	tokenHeaderKey = "x-runner-token"
-	// Deprecated: will be removed after Gitea 1.20 released.
-	versionHeaderKey = "x-runner-version"
 )
 
 var withRunner = connect.WithInterceptors(connect.UnaryInterceptorFunc(func(unaryFunc connect.UnaryFunc) connect.UnaryFunc {
@@ -35,9 +34,6 @@ var withRunner = connect.WithInterceptors(connect.UnaryInterceptorFunc(func(unar
 		}
 		uuid := request.Header().Get(uuidHeaderKey)
 		token := request.Header().Get(tokenHeaderKey)
-		// TODO: version will be removed from request header after Gitea 1.20 released.
-		// And Gitea will not try to read version from reuqest header
-		version := request.Header().Get(versionHeaderKey)
 
 		runner, err := actions_model.GetRunnerByUUID(ctx, uuid)
 		if err != nil {
@@ -50,22 +46,26 @@ var withRunner = connect.WithInterceptors(connect.UnaryInterceptorFunc(func(unar
 			return nil, status.Error(codes.Unauthenticated, "unregistered runner")
 		}
 
-		cols := []string{"last_online"}
-
-		// TODO: version will be removed from request header after Gitea 1.20 released.
-		// And Gitea will not try to read version from reuqest header
-		version, _ = util.SplitStringAtByteN(version, 64)
-		if !util.IsEmptyString(version) && runner.Version != version {
-			runner.Version = version
-			cols = append(cols, "version")
-		}
-		runner.LastOnline = timeutil.TimeStampNow()
-		if methodName == "UpdateTask" || methodName == "UpdateLog" {
-			runner.LastActive = timeutil.TimeStampNow()
+		now := time.Now()
+		cols := make([]string, 0, 2)
+		// Debounce last_active too: while a runner streams logs, UpdateLog fires
+		// many times per second and writing on each is a major source of DB load.
+		// Persist only when stale enough to affect the active/idle status.
+		if (methodName == "UpdateTask" || methodName == "UpdateLog") &&
+			actions_model.ShouldPersistLastActive(runner.LastActive, now) {
+			runner.LastActive = timeutil.TimeStamp(now.Unix())
 			cols = append(cols, "last_active")
 		}
-		if err := actions_model.UpdateRunner(ctx, runner, cols...); err != nil {
-			log.Error("can't update runner status: %v", err)
+		// Debounce last_online: writing on every poll is a major source of DB load
+		// with many runners. Persist only when stale enough to affect offline status.
+		if actions_model.ShouldPersistLastOnline(runner.LastOnline, now) {
+			runner.LastOnline = timeutil.TimeStamp(now.Unix())
+			cols = append(cols, "last_online")
+		}
+		if len(cols) > 0 {
+			if err := actions_model.UpdateRunner(ctx, runner, cols...); err != nil {
+				log.Error("can't update runner status: %v", err)
+			}
 		}
 
 		ctx = context.WithValue(ctx, runnerCtxKey{}, runner)

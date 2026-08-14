@@ -7,25 +7,21 @@
 package git
 
 import (
+	"context"
 	"path"
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/filemode"
-	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 // GetTreeEntryByPath get the tree entries according the sub dir
-func (t *Tree) GetTreeEntryByPath(relpath string) (*TreeEntry, error) {
+func (t *Tree) GetTreeEntryByPath(ctx context.Context, gitRepo *Repository, relpath string) (*TreeEntry, error) {
 	if len(relpath) == 0 {
 		return &TreeEntry{
-			ID: t.ID,
-			// Type: ObjectTree,
-			gogitTreeEntry: &object.TreeEntry{
-				Name: "",
-				Mode: filemode.Dir,
-				Hash: plumbing.Hash(t.ID.RawValue()),
-			},
+			ID:        t.ID,
+			ptree:     t,
+			name:      "",
+			entryMode: EntryModeTree,
 		}, nil
 	}
 
@@ -35,7 +31,7 @@ func (t *Tree) GetTreeEntryByPath(relpath string) (*TreeEntry, error) {
 	tree := t
 	for i, name := range parts {
 		if i == len(parts)-1 {
-			entries, err := tree.ListEntries()
+			entries, err := tree.ListEntries(ctx, gitRepo)
 			if err != nil {
 				if err == plumbing.ErrObjectNotFound {
 					return nil, ErrNotExist{
@@ -50,7 +46,7 @@ func (t *Tree) GetTreeEntryByPath(relpath string) (*TreeEntry, error) {
 				}
 			}
 		} else {
-			tree, err = tree.SubTree(name)
+			tree, err = tree.SubTree(ctx, gitRepo, name)
 			if err != nil {
 				if err == plumbing.ErrObjectNotFound {
 					return nil, ErrNotExist{

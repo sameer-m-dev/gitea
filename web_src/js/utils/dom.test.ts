@@ -1,0 +1,71 @@
+import {
+  createElementFromAttrs, createElementFromHTML,
+  queryElemChildren, querySingleVisibleElem,
+  protectMorphElements, recoverMorphElements,
+  toggleElem,
+} from './dom.ts';
+
+test('createElementFromHTML', () => {
+  expect(createElementFromHTML('<a>foo<span>bar</span></a>').outerHTML).toEqual('<a>foo<span>bar</span></a>');
+  expect(createElementFromHTML('<tr data-x="1"><td>foo</td></tr>').outerHTML).toEqual('<tr data-x="1"><td>foo</td></tr>');
+  expect(createElementFromHTML('<TR data-x="1"><td>foo</td></TR>').outerHTML).toEqual('<tr data-x="1"><td>foo</td></tr>');
+  expect(createElementFromHTML('<trx></trx>').outerHTML).toEqual('<trx></trx>');
+});
+
+test('createElementFromAttrs', () => {
+  const el = createElementFromAttrs('button', {
+    id: 'the-id',
+    class: 'cls-1 cls-2',
+    disabled: true,
+    checked: false,
+    required: null,
+    tabindex: 0,
+    'data-foo': 'the-data',
+  }, 'txt', createElementFromHTML('<span>inner</span>'));
+  expect(el.outerHTML).toEqual('<button id="the-id" class="cls-1 cls-2" disabled="" tabindex="0" data-foo="the-data">txt<span>inner</span></button>');
+});
+
+test('querySingleVisibleElem', () => {
+  let el = createElementFromHTML('<div></div>');
+  expect(querySingleVisibleElem(el, 'span')).toBeNull();
+  el = createElementFromHTML('<div><span>foo</span></div>');
+  expect(querySingleVisibleElem(el, 'span')!.textContent).toEqual('foo');
+  el = createElementFromHTML('<div><span style="display: none;">foo</span><span>bar</span></div>');
+  expect(querySingleVisibleElem(el, 'span')!.textContent).toEqual('bar');
+  el = createElementFromHTML('<div><span class="some-class tw-hidden">foo</span><span>bar</span></div>');
+  expect(querySingleVisibleElem(el, 'span')!.textContent).toEqual('bar');
+  el = createElementFromHTML('<div><span>foo</span><span>bar</span></div>');
+  expect(() => querySingleVisibleElem(el, 'span')).toThrow('Expected exactly one visible element');
+});
+
+test('queryElemChildren', () => {
+  const el = createElementFromHTML('<div><span class="a">a</span><span class="b">b</span></div>');
+  const children = queryElemChildren(el, '.a');
+  expect(children.length).toEqual(1);
+});
+
+test('toggleElem', () => {
+  const el = createElementFromHTML('<div><div>a</div><div class="tw-hidden">b</div></div>');
+  toggleElem(el.children);
+  expect(el.outerHTML).toEqual('<div><div class="tw-hidden">a</div><div class="">b</div></div>');
+  toggleElem(el.children, false);
+  expect(el.outerHTML).toEqual('<div><div class="tw-hidden">a</div><div class="tw-hidden">b</div></div>');
+  toggleElem(el.children, true);
+  expect(el.outerHTML).toEqual('<div><div class="">a</div><div class="">b</div></div>');
+});
+
+test('protectMorphElements', () => {
+  const el = createElementFromHTML('<div><span data-morph-protect="">foo</span></div>');
+  const protectedElems = protectMorphElements(el);
+
+  const span = el.querySelector('span')!;
+  const spanMorphProtectId = span.getAttribute('data-morph-protect');
+  expect(spanMorphProtectId).toBeTruthy();
+  expect(el.outerHTML).toEqual(`<div><span data-morph-protect="${spanMorphProtectId}">foo</span></div>`);
+  span.textContent = 'bar';
+  span.classList.add('new-class');
+  expect(el.outerHTML).toEqual(`<div><span data-morph-protect="${spanMorphProtectId}" class="new-class">bar</span></div>`);
+
+  recoverMorphElements(el, protectedElems);
+  expect(el.outerHTML).toEqual('<div><span data-morph-protect="">foo</span></div>');
+});

@@ -7,55 +7,21 @@
 package git
 
 import (
-	"strings"
+	"context"
 
-	"code.gitea.io/gitea/modules/log"
+	"gitea.dev/modules/log"
 
 	"github.com/go-git/go-git/v5/plumbing"
 )
 
 // IsTagExist returns true if given tag exists in the repository.
-func (repo *Repository) IsTagExist(name string) bool {
+func (repo *Repository) IsTagExist(_ context.Context, name string) bool {
 	_, err := repo.gogitRepo.Reference(plumbing.ReferenceName(TagPrefix+name), true)
 	return err == nil
 }
 
-// GetTags returns all tags of the repository.
-// returning at most limit tags, or all if limit is 0.
-func (repo *Repository) GetTags(skip, limit int) ([]string, error) {
-	var tagNames []string
-
-	tags, err := repo.gogitRepo.Tags()
-	if err != nil {
-		return nil, err
-	}
-
-	_ = tags.ForEach(func(tag *plumbing.Reference) error {
-		tagNames = append(tagNames, strings.TrimPrefix(tag.Name().String(), TagPrefix))
-		return nil
-	})
-
-	// Reverse order
-	for i := 0; i < len(tagNames)/2; i++ {
-		j := len(tagNames) - i - 1
-		tagNames[i], tagNames[j] = tagNames[j], tagNames[i]
-	}
-
-	// since we have to reverse order we can paginate only afterwards
-	if len(tagNames) < skip {
-		tagNames = []string{}
-	} else {
-		tagNames = tagNames[skip:]
-	}
-	if limit != 0 && len(tagNames) > limit {
-		tagNames = tagNames[:limit]
-	}
-
-	return tagNames, nil
-}
-
 // GetTagType gets the type of the tag, either commit (simple) or tag (annotated)
-func (repo *Repository) GetTagType(id ObjectID) (string, error) {
+func (repo *Repository) GetTagType(_ context.Context, id ObjectID) (string, error) {
 	// Get tag type
 	obj, err := repo.gogitRepo.Object(plumbing.AnyObject, plumbing.Hash(id.RawValue()))
 	if err != nil {
@@ -68,22 +34,22 @@ func (repo *Repository) GetTagType(id ObjectID) (string, error) {
 	return obj.Type().String(), nil
 }
 
-func (repo *Repository) getTag(tagID ObjectID, name string) (*Tag, error) {
+func (repo *Repository) getTag(ctx context.Context, tagID ObjectID, name string) (*Tag, error) {
 	t, ok := repo.tagCache.Get(tagID.String())
 	if ok {
 		log.Debug("Hit cache: %s", tagID)
-		tagClone := *t.(*Tag)
+		tagClone := *t
 		tagClone.Name = name // This is necessary because lightweight tags may have same id
 		return &tagClone, nil
 	}
 
-	tp, err := repo.GetTagType(tagID)
+	tp, err := repo.GetTagType(ctx, tagID)
 	if err != nil {
 		return nil, err
 	}
 
 	// Get the commit ID and tag ID (may be different for annotated tag) for the returned tag object
-	commitIDStr, err := repo.GetTagCommitID(name)
+	commitIDStr, err := repo.GetTagCommitID(ctx, name)
 	if err != nil {
 		// every tag should have a commit ID so return all errors
 		return nil, err
@@ -95,17 +61,17 @@ func (repo *Repository) getTag(tagID ObjectID, name string) (*Tag, error) {
 
 	// If type is "commit, the tag is a lightweight tag
 	if ObjectType(tp) == ObjectCommit {
-		commit, err := repo.GetCommit(commitIDStr)
+		commit, err := repo.GetCommit(ctx, commitIDStr)
 		if err != nil {
 			return nil, err
 		}
 		tag := &Tag{
-			Name:    name,
-			ID:      tagID,
-			Object:  commitID,
-			Type:    tp,
-			Tagger:  commit.Committer,
-			Message: commit.Message(),
+			Name:          name,
+			ID:            tagID,
+			Object:        commitID,
+			Type:          tp,
+			Tagger:        commit.Committer,
+			CommitMessage: CommitMessage{MessageRaw: commit.CommitMessage.MessageRaw},
 		}
 
 		repo.tagCache.Set(tagID.String(), tag)
@@ -122,12 +88,12 @@ func (repo *Repository) getTag(tagID ObjectID, name string) (*Tag, error) {
 	}
 
 	tag := &Tag{
-		Name:    name,
-		ID:      tagID,
-		Object:  commitID.Type().MustID(gogitTag.Target[:]),
-		Type:    tp,
-		Tagger:  &gogitTag.Tagger,
-		Message: gogitTag.Message,
+		Name:          name,
+		ID:            tagID,
+		Object:        commitID.Type().MustID(gogitTag.Target[:]),
+		Type:          tp,
+		Tagger:        &gogitTag.Tagger,
+		CommitMessage: CommitMessage{MessageRaw: gogitTag.Message},
 	}
 
 	repo.tagCache.Set(tagID.String(), tag)

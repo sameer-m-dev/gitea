@@ -322,3 +322,23 @@
   team_id: 22
   type: 3
   access_mode: 1
+
+-
+  id: 55
+  team_id: 18
+  type: 1 # code
+  access_mode: 4
+
+-
+  id: 56
+  team_id: 23
+  type: 1 # code
+  access_mode: 4
+
+-
+  id: 57
+  team_id: 24
+  type: 1 # code
+  access_mode: 2
+
+# DO NOT add more test data in the fixtures, test case should prepare their own test data separately and clearly

@@ -7,7 +7,6 @@
 .dashboard.feeds .context.user.menu .ui.header,
 .dashboard.issues .context.user.menu .ui.header {
   font-size: 1rem;
-  text-transform: none;
 }
 
 .dashboard.feeds .filter.menu,
@@ -21,11 +20,6 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-}
-
-.dashboard.feeds .filter.menu .item .text.truncate,
-.dashboard.issues .filter.menu .item .text.truncate {
-  width: 75%;
 }
 
 /* Sort */

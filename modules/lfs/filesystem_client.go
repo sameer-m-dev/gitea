@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"code.gitea.io/gitea/modules/util"
+	"gitea.dev/modules/util"
 )
 
 // FilesystemClient is used to read LFS data from a filesystem path
@@ -44,7 +44,7 @@ func (c *FilesystemClient) Download(ctx context.Context, objects []Pointer, call
 		if err != nil {
 			return err
 		}
-
+		defer f.Close()
 		if err := callback(p, f, nil); err != nil {
 			return err
 		}
@@ -75,7 +75,7 @@ func (c *FilesystemClient) Upload(ctx context.Context, objects []Pointer, callba
 			if err != nil {
 				return err
 			}
-
+			defer f.Close()
 			_, err = io.Copy(f, content)
 
 			return err

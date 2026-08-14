@@ -6,9 +6,9 @@ package actions
 import (
 	"context"
 
-	"code.gitea.io/gitea/models/db"
-	repo_model "code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/modules/container"
+	"gitea.dev/models/db"
+	repo_model "gitea.dev/models/repo"
+	"gitea.dev/modules/container"
 
 	"xorm.io/builder"
 )
@@ -16,11 +16,9 @@ import (
 type SpecList []*ActionScheduleSpec
 
 func (specs SpecList) GetScheduleIDs() []int64 {
-	ids := make(container.Set[int64], len(specs))
-	for _, spec := range specs {
-		ids.Add(spec.ScheduleID)
-	}
-	return ids.Values()
+	return container.FilterSlice(specs, func(spec *ActionScheduleSpec) (int64, bool) {
+		return spec.ScheduleID, true
+	})
 }
 
 func (specs SpecList) LoadSchedules(ctx context.Context) error {
@@ -34,7 +32,7 @@ func (specs SpecList) LoadSchedules(ctx context.Context) error {
 	}
 
 	repoIDs := specs.GetRepoIDs()
-	repos, err := GetReposMapByIDs(ctx, repoIDs)
+	repos, err := repo_model.GetRepositoriesMapByIDs(ctx, repoIDs)
 	if err != nil {
 		return err
 	}
@@ -46,11 +44,9 @@ func (specs SpecList) LoadSchedules(ctx context.Context) error {
 }
 
 func (specs SpecList) GetRepoIDs() []int64 {
-	ids := make(container.Set[int64], len(specs))
-	for _, spec := range specs {
-		ids.Add(spec.RepoID)
-	}
-	return ids.Values()
+	return container.FilterSlice(specs, func(spec *ActionScheduleSpec) (int64, bool) {
+		return spec.RepoID, true
+	})
 }
 
 func (specs SpecList) LoadRepos(ctx context.Context) error {

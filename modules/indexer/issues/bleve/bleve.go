@@ -5,10 +5,13 @@ package bleve
 
 import (
 	"context"
+	"strconv"
 
-	indexer_internal "code.gitea.io/gitea/modules/indexer/internal"
-	inner_bleve "code.gitea.io/gitea/modules/indexer/internal/bleve"
-	"code.gitea.io/gitea/modules/indexer/issues/internal"
+	"gitea.dev/modules/indexer"
+	indexer_internal "gitea.dev/modules/indexer/internal"
+	inner_bleve "gitea.dev/modules/indexer/internal/bleve"
+	"gitea.dev/modules/indexer/issues/internal"
+	"gitea.dev/modules/util"
 
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/analysis/analyzer/custom"
@@ -23,7 +26,7 @@ import (
 const (
 	issueIndexerAnalyzer      = "issueIndexer"
 	issueIndexerDocType       = "issueIndexerDocType"
-	issueIndexerLatestVersion = 4
+	issueIndexerLatestVersion = 7
 )
 
 const unicodeNormalizeName = "unicodeNormalize"
@@ -35,11 +38,7 @@ func addUnicodeNormalizeTokenFilter(m *mapping.IndexMappingImpl) error {
 	})
 }
 
-const (
-	maxBatchSize = 16
-	// fuzzyDenominator determines the levenshtein distance per each character of a keyword
-	fuzzyDenominator = 4
-)
+const maxBatchSize = 16
 
 // IndexerData an update to the issue indexer
 type IndexerData internal.IndexerData
@@ -79,13 +78,15 @@ func generateIssueIndexMapping() (mapping.IndexMapping, error) {
 
 	docMapping.AddFieldMappingsAt("is_pull", boolFieldMapping)
 	docMapping.AddFieldMappingsAt("is_closed", boolFieldMapping)
+	docMapping.AddFieldMappingsAt("is_archived", boolFieldMapping)
 	docMapping.AddFieldMappingsAt("label_ids", numberFieldMapping)
 	docMapping.AddFieldMappingsAt("no_label", boolFieldMapping)
 	docMapping.AddFieldMappingsAt("milestone_id", numberFieldMapping)
-	docMapping.AddFieldMappingsAt("project_id", numberFieldMapping)
-	docMapping.AddFieldMappingsAt("project_board_id", numberFieldMapping)
+	docMapping.AddFieldMappingsAt("project_ids", numberFieldMapping)
+	docMapping.AddFieldMappingsAt("no_project", boolFieldMapping)
 	docMapping.AddFieldMappingsAt("poster_id", numberFieldMapping)
-	docMapping.AddFieldMappingsAt("assignee_id", numberFieldMapping)
+	docMapping.AddFieldMappingsAt("assignee_ids", numberFieldMapping)
+	docMapping.AddFieldMappingsAt("no_assignee", boolFieldMapping)
 	docMapping.AddFieldMappingsAt("mention_ids", numberFieldMapping)
 	docMapping.AddFieldMappingsAt("reviewed_ids", numberFieldMapping)
 	docMapping.AddFieldMappingsAt("review_requested_ids", numberFieldMapping)
@@ -121,6 +122,10 @@ var _ internal.Indexer = &Indexer{}
 type Indexer struct {
 	inner                    *inner_bleve.Indexer
 	indexer_internal.Indexer // do not composite inner_bleve.Indexer directly to avoid exposing too much
+}
+
+func (b *Indexer) SupportedSearchModes() []indexer.SearchMode {
+	return indexer.SearchModesExactWordsFuzzy()
 }
 
 // NewIndexer creates a new bleve local indexer
@@ -160,16 +165,24 @@ func (b *Indexer) Search(ctx context.Context, options *internal.SearchOptions) (
 	var queries []query.Query
 
 	if options.Keyword != "" {
-		fuzziness := 0
-		if options.IsFuzzyKeyword {
-			fuzziness = len(options.Keyword) / fuzzyDenominator
+		searchMode := util.IfZero(options.SearchMode, b.SupportedSearchModes()[0].ModeValue)
+		if searchMode == indexer.SearchModeWords || searchMode == indexer.SearchModeFuzzy {
+			fuzziness := 0
+			if searchMode == indexer.SearchModeFuzzy {
+				fuzziness = inner_bleve.GuessFuzzinessByKeyword(options.Keyword)
+			}
+			queries = append(queries, bleve.NewDisjunctionQuery([]query.Query{
+				inner_bleve.MatchAndQuery(options.Keyword, "title", issueIndexerAnalyzer, fuzziness),
+				inner_bleve.MatchAndQuery(options.Keyword, "content", issueIndexerAnalyzer, fuzziness),
+				inner_bleve.MatchAndQuery(options.Keyword, "comments", issueIndexerAnalyzer, fuzziness),
+			}...))
+		} else /* exact */ {
+			queries = append(queries, bleve.NewDisjunctionQuery([]query.Query{
+				inner_bleve.MatchPhraseQuery(options.Keyword, "title", issueIndexerAnalyzer, 0),
+				inner_bleve.MatchPhraseQuery(options.Keyword, "content", issueIndexerAnalyzer, 0),
+				inner_bleve.MatchPhraseQuery(options.Keyword, "comments", issueIndexerAnalyzer, 0),
+			}...))
 		}
-
-		queries = append(queries, bleve.NewDisjunctionQuery([]query.Query{
-			inner_bleve.MatchPhraseQuery(options.Keyword, "title", issueIndexerAnalyzer, fuzziness),
-			inner_bleve.MatchPhraseQuery(options.Keyword, "content", issueIndexerAnalyzer, fuzziness),
-			inner_bleve.MatchPhraseQuery(options.Keyword, "comments", issueIndexerAnalyzer, fuzziness),
-		}...))
 	}
 
 	if len(options.RepoIDs) > 0 || options.AllPublic {
@@ -188,6 +201,9 @@ func (b *Indexer) Search(ctx context.Context, options *internal.SearchOptions) (
 	}
 	if options.IsClosed.Has() {
 		queries = append(queries, inner_bleve.BoolFieldQuery(options.IsClosed.Value(), "is_closed"))
+	}
+	if options.IsArchived.Has() {
+		queries = append(queries, inner_bleve.BoolFieldQuery(options.IsArchived.Value(), "is_archived"))
 	}
 
 	if options.NoLabelOnly {
@@ -225,19 +241,32 @@ func (b *Indexer) Search(ctx context.Context, options *internal.SearchOptions) (
 		queries = append(queries, bleve.NewDisjunctionQuery(milestoneQueries...))
 	}
 
-	if options.ProjectID.Has() {
-		queries = append(queries, inner_bleve.NumericEqualityQuery(options.ProjectID.Value(), "project_id"))
-	}
-	if options.ProjectBoardID.Has() {
-		queries = append(queries, inner_bleve.NumericEqualityQuery(options.ProjectBoardID.Value(), "project_board_id"))
+	if options.NoProjectOnly {
+		queries = append(queries, inner_bleve.BoolFieldQuery(true, "no_project"))
+	} else if len(options.ProjectIDs) > 0 {
+		var projectQueries []query.Query
+		for _, projectID := range options.ProjectIDs {
+			projectQueries = append(projectQueries, inner_bleve.NumericEqualityQuery(projectID, "project_ids"))
+		}
+		// FIXME: ISSUE-MULTIPLE-PROJECTS-FILTER: this logic is not right, it should use "AND" but not "OR"
+		queries = append(queries, bleve.NewDisjunctionQuery(projectQueries...))
 	}
 
-	if options.PosterID.Has() {
-		queries = append(queries, inner_bleve.NumericEqualityQuery(options.PosterID.Value(), "poster_id"))
+	if options.PosterID != "" {
+		// "(none)" becomes 0, it means no poster
+		posterIDInt64, _ := strconv.ParseInt(options.PosterID, 10, 64)
+		queries = append(queries, inner_bleve.NumericEqualityQuery(posterIDInt64, "poster_id"))
 	}
 
-	if options.AssigneeID.Has() {
-		queries = append(queries, inner_bleve.NumericEqualityQuery(options.AssigneeID.Value(), "assignee_id"))
+	switch options.AssigneeID {
+	case "":
+	case "(any)":
+		queries = append(queries, inner_bleve.BoolFieldQuery(false, "no_assignee"))
+	case "(none)":
+		queries = append(queries, inner_bleve.BoolFieldQuery(true, "no_assignee"))
+	default:
+		assigneeIDInt64, _ := strconv.ParseInt(options.AssigneeID, 10, 64)
+		queries = append(queries, inner_bleve.NumericEqualityQuery(assigneeIDInt64, "assignee_ids"))
 	}
 
 	if options.MentionID.Has() {
